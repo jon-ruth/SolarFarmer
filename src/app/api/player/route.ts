@@ -1,11 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { SOLAR_PANEL_STATS, BUILDING_STATS } from "@/types/game";
-import type { Player, Town, SolarPanel, Building, Worker } from "@/types/game";
-
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 15);
-}
 
 /**
  * GET /api/player?address=0x...
@@ -21,13 +15,21 @@ export async function GET(request: NextRequest) {
   try {
     const player = await db.getPlayer(address);
     const town = await db.getTown(address);
-    const rank = player ? await db.getPlayerRank(address) : null;
 
     if (!player || !town) {
-      return NextResponse.json({ player: null, town: null, rank: null });
+      return NextResponse.json({ player: null, town: null });
     }
 
-    return NextResponse.json({ player, town, rank });
+    // Serialize BigInt values
+    const serializedPlayer = {
+      ...player,
+      solarBalance: player.solarBalance.toString(),
+      ethRewards: player.ethRewards.toString(),
+      createdAt: player.createdAt.toISOString(),
+      lastClaimAt: player.lastClaimAt.toISOString(),
+    };
+
+    return NextResponse.json({ player: serializedPlayer, town });
   } catch (error) {
     console.error("Error fetching player:", error);
     return NextResponse.json(
@@ -39,7 +41,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/player
- * Create new player and initialize town
+ * Create new player and initialize town with starter kit
  */
 export async function POST(request: NextRequest) {
   try {
@@ -62,68 +64,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const now = new Date();
-    const today = now.toISOString().split("T")[0];
+    // Create player and town with starter kit
+    const result = await db.createPlayer(address, townName);
 
-    // Create player
-    const player: Player = {
-      address: address as `0x${string}`,
-      townName,
-      solarBalance: BigInt(0),
-      ethRewards: BigInt(0),
-      createdAt: now,
-      lastClaimAt: now,
-      streakDays: 1,
-      streakLastClaimDate: today,
+    if (!result) {
+      return NextResponse.json(
+        { error: "Failed to create player" },
+        { status: 500 }
+      );
+    }
+
+    const { player, town } = result;
+
+    // Serialize BigInt values
+    const serializedPlayer = {
+      ...player,
+      solarBalance: player.solarBalance.toString(),
+      ethRewards: player.ethRewards.toString(),
+      createdAt: player.createdAt.toISOString(),
+      lastClaimAt: player.lastClaimAt.toISOString(),
     };
 
-    // Create starter kit
-    const starterPanel: SolarPanel = {
-      id: generateId(),
-      type: "basic",
-      level: 1,
-      powerOutput: SOLAR_PANEL_STATS.basic.basePower,
-      constructionStartedAt: null,
-      constructionEndsAt: null,
-      isConstructing: false,
-    };
-
-    const starterWorker: Worker = {
-      id: generateId(),
-      level: 1,
-      speedMultiplier: 1.0,
-      isWorking: false,
-      currentTaskId: null,
-    };
-
-    const starterBuilding: Building = {
-      id: generateId(),
-      type: "home",
-      level: 1,
-      powerRequired: BUILDING_STATS.home.basePowerRequired,
-      isPowered: true,
-      rewardMultiplier: BUILDING_STATS.home.baseRewardMultiplier,
-    };
-
-    // Create town
-    const town: Town = {
-      id: generateId(),
-      playerId: address,
-      name: townName,
-      solarPanels: [starterPanel],
-      batteries: [],
-      buildings: [starterBuilding],
-      workers: [starterWorker],
-      totalPowerCapacity: starterPanel.powerOutput,
-      totalPowerDemand: starterBuilding.powerRequired,
-      developmentScore: 10,
-    };
-
-    // Save to database
-    await db.createPlayer(player);
-    await db.createTown(town);
-
-    return NextResponse.json({ player, town }, { status: 201 });
+    return NextResponse.json(
+      { player: serializedPlayer, town },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("Error creating player:", error);
     return NextResponse.json(

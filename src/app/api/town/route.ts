@@ -12,7 +12,7 @@ import {
 } from "@/types/game";
 
 function generateId(): string {
-  return Math.random().toString(36).substring(2, 15);
+  return crypto.randomUUID?.() ?? Math.random().toString(36).substring(2, 15);
 }
 
 /**
@@ -71,14 +71,19 @@ export async function POST(request: NextRequest) {
           isConstructing: true,
         };
 
-        // Update worker
-        await db.updateWorker(address, availableWorker.id, {
-          isWorking: true,
-          currentTaskId: newPanel.id,
-        });
+        // Add panel (also updates worker)
+        const success = await db.addSolarPanel(
+          address,
+          newPanel,
+          availableWorker.id
+        );
 
-        // Add panel
-        await db.addSolarPanel(address, newPanel);
+        if (!success) {
+          return NextResponse.json(
+            { error: "Failed to start construction" },
+            { status: 500 }
+          );
+        }
 
         const updatedTown = await db.getTown(address);
         return NextResponse.json({ town: updatedTown, panel: newPanel });
@@ -106,12 +111,19 @@ export async function POST(request: NextRequest) {
           constructionEndsAt: endsAt,
         };
 
-        await db.updateWorker(address, availableWorker.id, {
-          isWorking: true,
-          currentTaskId: newBattery.id,
-        });
+        // Add battery (also updates worker)
+        const success = await db.addBattery(
+          address,
+          newBattery,
+          availableWorker.id
+        );
 
-        await db.addBattery(address, newBattery);
+        if (!success) {
+          return NextResponse.json(
+            { error: "Failed to start construction" },
+            { status: 500 }
+          );
+        }
 
         const updatedTown = await db.getTown(address);
         return NextResponse.json({ town: updatedTown, battery: newBattery });
@@ -136,10 +148,27 @@ export async function POST(request: NextRequest) {
           rewardMultiplier: stats.baseRewardMultiplier,
         };
 
-        await db.addBuilding(address, newBuilding);
+        const success = await db.addBuilding(address, newBuilding);
 
+        if (!success) {
+          return NextResponse.json(
+            { error: "Failed to add building" },
+            { status: 500 }
+          );
+        }
+
+        // Recalculate town stats
         const updatedTown = await db.getTown(address);
-        return NextResponse.json({ town: updatedTown, building: newBuilding });
+        if (updatedTown) {
+          const totalPowerDemand = updatedTown.buildings.reduce(
+            (sum, b) => sum + b.powerRequired,
+            0
+          );
+          await db.updateTownStats(address, { totalPowerDemand });
+        }
+
+        const finalTown = await db.getTown(address);
+        return NextResponse.json({ town: finalTown, building: newBuilding });
       }
 
       case "hire_worker": {
@@ -151,7 +180,14 @@ export async function POST(request: NextRequest) {
           currentTaskId: null,
         };
 
-        await db.addWorker(address, newWorker);
+        const success = await db.addWorker(address, newWorker);
+
+        if (!success) {
+          return NextResponse.json(
+            { error: "Failed to hire worker" },
+            { status: 500 }
+          );
+        }
 
         const updatedTown = await db.getTown(address);
         return NextResponse.json({ town: updatedTown, worker: newWorker });
@@ -182,10 +218,21 @@ export async function POST(request: NextRequest) {
         }
 
         const newLevel = worker.level + 1;
-        await db.updateWorker(address, workerId, {
-          level: newLevel,
-          speedMultiplier: 1.0 + (newLevel - 1) * 0.25,
-        });
+        const newSpeedMultiplier = 1.0 + (newLevel - 1) * 0.25;
+
+        const success = await db.upgradeWorker(
+          address,
+          workerId,
+          newLevel,
+          newSpeedMultiplier
+        );
+
+        if (!success) {
+          return NextResponse.json(
+            { error: "Failed to upgrade worker" },
+            { status: 500 }
+          );
+        }
 
         const updatedTown = await db.getTown(address);
         return NextResponse.json({ town: updatedTown });
@@ -193,90 +240,55 @@ export async function POST(request: NextRequest) {
 
       case "complete_construction": {
         // Check and complete any finished construction
-        const now = new Date();
-        let hasChanges = false;
+        const updatedTown = await db.completeConstruction(address);
 
-        // Check solar panels
-        for (const panel of town.solarPanels) {
-          if (
-            panel.isConstructing &&
-            panel.constructionEndsAt &&
-            now >= new Date(panel.constructionEndsAt)
-          ) {
-            const stats = SOLAR_PANEL_STATS[panel.type];
-            await db.updateSolarPanel(address, panel.id, {
-              isConstructing: false,
-              constructionStartedAt: null,
-              constructionEndsAt: null,
-              powerOutput: stats.basePower * panel.level,
-            });
-
-            // Free up worker
-            const worker = town.workers.find(
-              (w) => w.currentTaskId === panel.id
-            );
-            if (worker) {
-              await db.updateWorker(address, worker.id, {
-                isWorking: false,
-                currentTaskId: null,
-              });
-            }
-
-            hasChanges = true;
-          }
+        if (!updatedTown) {
+          return NextResponse.json(
+            { error: "Failed to check construction" },
+            { status: 500 }
+          );
         }
 
-        // Recalculate town stats
-        if (hasChanges) {
-          const updatedTown = await db.getTown(address);
-          if (updatedTown) {
-            // Calculate stats
-            const totalPowerCapacity = updatedTown.solarPanels
-              .filter((p) => !p.isConstructing)
-              .reduce((sum, p) => sum + p.powerOutput, 0);
+        // Recalculate and update town stats
+        const totalPowerCapacity = updatedTown.solarPanels
+          .filter((p) => !p.isConstructing)
+          .reduce((sum, p) => sum + p.powerOutput, 0);
 
-            const totalPowerDemand = updatedTown.buildings.reduce(
-              (sum, b) => sum + b.powerRequired,
-              0
-            );
+        const totalPowerDemand = updatedTown.buildings.reduce(
+          (sum, b) => sum + b.powerRequired,
+          0
+        );
 
-            // Update buildings powered status
-            let remainingPower = totalPowerCapacity;
-            const updatedBuildings = updatedTown.buildings.map((b) => {
-              if (remainingPower >= b.powerRequired) {
-                remainingPower -= b.powerRequired;
-                return { ...b, isPowered: true };
-              }
-              return { ...b, isPowered: false };
-            });
+        // Calculate development score
+        const panelScore = updatedTown.solarPanels
+          .filter((p) => !p.isConstructing)
+          .reduce((sum, p) => sum + p.powerOutput * p.level, 0);
 
-            // Calculate score
-            const panelScore = updatedTown.solarPanels
-              .filter((p) => !p.isConstructing)
-              .reduce((sum, p) => sum + p.powerOutput * p.level, 0);
-            const buildingScore = updatedBuildings
-              .filter((b) => b.isPowered)
-              .reduce((sum, b) => sum + b.level * b.rewardMultiplier * 10, 0);
-            const workerScore = updatedTown.workers.reduce(
-              (sum, w) => sum + w.level * 5,
-              0
-            );
+        const buildingScore = updatedTown.buildings
+          .filter((b) => b.isPowered)
+          .reduce((sum, b) => sum + b.level * b.rewardMultiplier * 10, 0);
 
-            const developmentScore = Math.floor(
-              panelScore + buildingScore + workerScore
-            );
+        const workerScore = updatedTown.workers.reduce(
+          (sum, w) => sum + w.level * 5,
+          0
+        );
 
-            await db.updateTown(address, {
-              totalPowerCapacity,
-              totalPowerDemand,
-              developmentScore,
-              buildings: updatedBuildings,
-            });
-          }
-        }
+        const batteryScore = updatedTown.batteries
+          .filter((b) => !b.isConstructing)
+          .reduce((sum, b) => sum + b.capacity * b.level, 0);
+
+        const developmentScore = Math.floor(
+          panelScore + buildingScore + workerScore + batteryScore
+        );
+
+        await db.updateTownStats(address, {
+          totalPowerCapacity,
+          totalPowerDemand,
+          developmentScore,
+        });
 
         const finalTown = await db.getTown(address);
-        return NextResponse.json({ town: finalTown, updated: hasChanges });
+        return NextResponse.json({ town: finalTown, updated: true });
       }
 
       default:
