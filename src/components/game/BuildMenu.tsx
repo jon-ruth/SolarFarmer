@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useGameStore } from "@/store/gameStore";
 import { Button } from "@/components/ui/Button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import {
   SOLAR_PANEL_STATS,
   BUILDING_STATS,
@@ -11,8 +10,34 @@ import {
   type BuildingType,
 } from "@/types/game";
 import { formatSolar } from "@/lib/utils";
+import {
+  SolarPanelSprite,
+  BatterySprite,
+  HomeSprite,
+  SchoolSprite,
+  HospitalSprite,
+  FactorySprite,
+  WorkerSprite,
+} from "@/components/sprites";
 
 type Tab = "solar" | "buildings" | "workers";
+
+// Building sprite selector for menu
+function BuildingMenuSprite({ type }: { type: BuildingType }) {
+  const props = { size: "md" as const, isPowered: true };
+  switch (type) {
+    case "home":
+      return <HomeSprite {...props} />;
+    case "school":
+      return <SchoolSprite {...props} />;
+    case "hospital":
+      return <HospitalSprite {...props} />;
+    case "factory":
+      return <FactorySprite {...props} />;
+    default:
+      return <HomeSprite {...props} />;
+  }
+}
 
 export function BuildMenu() {
   const [activeTab, setActiveTab] = useState<Tab>("solar");
@@ -31,10 +56,10 @@ export function BuildMenu() {
 
   const availableWorkers = town.workers.filter((w) => !w.isWorking).length;
 
-  const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: "solar", label: "Solar", icon: "☀️" },
-    { id: "buildings", label: "Buildings", icon: "🏠" },
-    { id: "workers", label: "Workers", icon: "👷" },
+  const tabs: { id: Tab; label: string; sprite: React.ReactNode }[] = [
+    { id: "solar", label: "Solar", sprite: <SolarPanelSprite size="sm" /> },
+    { id: "buildings", label: "Buildings", sprite: <HomeSprite size="sm" isPowered /> },
+    { id: "workers", label: "Workers", sprite: <WorkerSprite size="sm" /> },
   ];
 
   return (
@@ -52,13 +77,13 @@ export function BuildMenu() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 py-3 text-center transition-colors ${
+            className={`flex-1 py-2 flex items-center justify-center gap-1 transition-colors ${
               activeTab === tab.id
                 ? "bg-solar-50 text-solar-600 border-b-2 border-solar-500"
                 : "text-gray-600 hover:bg-gray-50"
             }`}
           >
-            <span className="text-lg mr-1">{tab.icon}</span>
+            {tab.sprite}
             <span className="text-sm font-medium">{tab.label}</span>
           </button>
         ))}
@@ -80,7 +105,7 @@ export function BuildMenu() {
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-2xl">🔆</span>
+                    <SolarPanelSprite size="md" />
                     <div>
                       <div className="font-medium">{stats.name}</div>
                       <div className="text-xs text-gray-500">
@@ -102,7 +127,7 @@ export function BuildMenu() {
             {/* Battery */}
             <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
               <div className="flex items-center gap-3">
-                <span className="text-2xl">🔋</span>
+                <BatterySprite size="md" chargePercent={100} />
                 <div>
                   <div className="font-medium">Battery Storage</div>
                   <div className="text-xs text-gray-500">50 kWh • 60 min</div>
@@ -123,12 +148,6 @@ export function BuildMenu() {
           <div className="space-y-3">
             {(Object.entries(BUILDING_STATS) as [BuildingType, typeof BUILDING_STATS.home][]).map(
               ([type, stats]) => {
-                const icons: Record<BuildingType, string> = {
-                  home: "🏠",
-                  school: "🏫",
-                  hospital: "🏥",
-                  factory: "🏭",
-                };
                 const costs: Record<BuildingType, number> = {
                   home: 200,
                   school: 500,
@@ -142,7 +161,7 @@ export function BuildMenu() {
                     className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-2xl">{icons[type]}</span>
+                      <BuildingMenuSprite type={type} />
                       <div>
                         <div className="font-medium">{stats.name}</div>
                         <div className="text-xs text-gray-500">
@@ -166,7 +185,7 @@ export function BuildMenu() {
             {/* Hire new worker */}
             <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
               <div className="flex items-center gap-3">
-                <span className="text-2xl">👷</span>
+                <WorkerSprite size="md" />
                 <div>
                   <div className="font-medium">Hire Worker</div>
                   <div className="text-xs text-gray-500">
@@ -186,12 +205,18 @@ export function BuildMenu() {
                 className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl">👷</span>
+                  <WorkerSprite
+                    size="md"
+                    level={worker.level}
+                    isWorking={worker.isWorking}
+                  />
                   <div>
                     <div className="font-medium">
                       Worker Lv.{worker.level}
                       {worker.isWorking && (
-                        <span className="text-yellow-500 ml-2">🔨</span>
+                        <span className="text-yellow-500 ml-2 text-xs">
+                          (busy)
+                        </span>
                       )}
                     </div>
                     <div className="text-xs text-gray-500">
